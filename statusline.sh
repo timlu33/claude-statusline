@@ -2,6 +2,9 @@
 # Disable globbing — defensive measure for handling arbitrary paths/JSON
 set -f
 
+# Bump on each release; shown (dim) at the end of line 1.
+STATUSLINE_VERSION="1.1.0"
+
 input=$(cat)
 
 if [ -z "$input" ]; then
@@ -16,6 +19,7 @@ fi
 # actually sees, not the lib's canonical default. A missing lib degrades gracefully and
 # never blocks the render.
 _RAW_ACWINDOW="${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}"
+# shellcheck source=/dev/null # SC1091: optional lib under the runtime $HOME; ShellCheck cannot follow it
 source "$HOME/.claude/hooks/_lib/ctx-thresholds.sh" 2>/dev/null || true
 std_model_window="${CTX_STD_MODEL_WINDOW:-200000}"
 
@@ -29,16 +33,12 @@ c_branch='\033[38;2;80;160;255m'           # cool blue
 c_dirty='\033[1;38;2;255;50;50m'           # neon red
 c_wt='\033[1;38;2;255;180;0m'              # amber
 c_gray='\033[38;2;140;140;140m'            # labels / separators
-c_magenta='\033[38;2;190;90;160m'          # effort — medium pink-purple (low-freq)
-c_magenta_bright='\033[1;38;2;255;50;180m' # effort max — vivid magenta + bold
+c_effort='\033[38;2;184;187;38m'           # effort high/xhigh — gruvbox green (low-freq)
+c_effort_max='\033[1;38;2;200;230;60m'     # effort max — bright lime + bold
 c_teal='\033[38;2;0;200;180m'              # agent name
 c_coral='\033[38;2;230;175;130m'           # output style — warm peach (low-freq)
 c_rate_5h='\033[38;2;255;140;50m'          # 5H icon — neon orange
 c_rate_7d='\033[38;2;80;160;255m'          # 7D icon — cool blue
-c_cost_low='\033[38;2;0;230;180m'          # cost < $0.50 — green
-c_cost_mid='\033[38;2;255;210;0m'          # cost $0.50-$2 — yellow
-c_cost_high='\033[1;38;2;255;80;50m'       # cost > $2 — red-orange
-c_cost_weekly='\033[38;2;230;200;90m'      # weekly total — clean gold
 c_session='\033[38;2;150;200;255m'         # session elapsed — soft sky blue
 c_ctx_1m='\033[1;38;2;100;220;255m'        # 1M context badge — bright cyan
 c_win_mismatch='\033[1;38;2;255;40;40m'    # WINDOW override > model's real window — red warning
@@ -152,9 +152,10 @@ render_rate_bar() {
     color=$(color_for_pct "$pct")
     bar=$(build_gradient_bar "$pct" "$bar_width")
 
-    [ -n "$rate_lines" ] && rate_lines+="\n"
-    rate_lines+="${c_label}${icon} ${label}${reset} ${bar} ${color}$(printf '%3d' "$pct")%${reset}"
-    [ -n "$reset_time" ] && rate_lines+=" ${c_gray}↻ ${reset_time}${reset}"
+    # 5H and 7D share one line, separated by sep
+    [ -n "$rate_bars" ] && rate_bars+="$sep"
+    rate_bars+="${c_label}${icon} ${label}${reset} ${bar} ${color}$(printf '%3d' "$pct")%${reset}"
+    [ -n "$reset_time" ] && rate_bars+=" ${c_gray}↻ ${reset_time}${reset}"
 }
 
 # ── Extract JSON (single jq call, merged with settings) ─
@@ -171,12 +172,11 @@ read_json=$(echo "$input" | jq -r --slurpfile settings "$settings_file" \
     .output_style.name // "",
     .agent.name // "",
     .session_id // "",
-    (.cost.total_cost_usd // null | if . then tostring else "" end),
     (.rate_limits.five_hour.used_percentage // null | if . then round | tostring else "" end),
     (.rate_limits.seven_day.used_percentage // null | if . then round | tostring else "" end),
     (.rate_limits.five_hour.resets_at // null | if . then tostring else "" end),
     (.rate_limits.seven_day.resets_at // null | if . then tostring else "" end),
-    (.cost.total_duration_ms // 0 | tostring),
+    (.cost.total_duration_ms // "" | tostring),
     (.effort.level // $settings[0].effortLevel // "default"),
     (.context_window.context_window_size // $stdwin | tostring),
     (.workspace.git_worktree // ""),
@@ -187,7 +187,7 @@ read_json=$(echo "$input" | jq -r --slurpfile settings "$settings_file" \
 ] | join("\u001f")' 2>/dev/null)
 
 IFS=$'\x1f' read -r model_name ctx_pct vim_mode has_worktree cwd \
-    output_style agent_name session_id cost_usd five_pct seven_pct \
+    output_style agent_name session_id five_pct seven_pct \
     five_reset_epoch seven_reset_epoch session_ms effort \
     ctx_size ws_git_worktree thinking_on \
     cache_input cache_creation cache_read \
@@ -200,15 +200,20 @@ model_name="${model_name%% (*}"
 [ -n "$CLAUDE_CODE_EFFORT_LEVEL" ] && effort="$CLAUDE_CODE_EFFORT_LEVEL"
 
 # ── Nerd Font Icons ─────────────────────────────────────
-cost_icon=$'\uf06d'       #  fire (burn rate)
-folder_icon=$'\uf07b'     #  folder
-effort_icon=$'\uf013'  #  single cog (FA4) — tier via color + label
-style_icon=$'\uf040'      #  pencil
-agent_icon=$'\uf544'      #  robot
-rate_5h_icon=$'\uf017'    #  clock
-rate_7d_icon=$'\uf133'    #  calendar-alt
-session_icon=$'\uf2f2'    #  stopwatch
-model_icon=$'\uf2db'      #  microchip
+# Icons are written as \x byte escapes, not $'\uXXXX'. Bash expands \u through the current
+# locale's charset: under a non-UTF-8 locale (a tmux server or cron started without LANG)
+# it falls back to the literal text "\uF2DB". Byte escapes emit the UTF-8 bytes directly.
+# When changing one, re-derive the bytes from this table rather than editing them by hand:
+#   folder=U+F07B effort=U+F013 style=U+F040 agent=U+F544
+#   5h=U+F017 7d=U+F133 session=U+F2F2 model=U+F2DB vim=U+E62B
+folder_icon=$'\xef\x81\xbb'     #  folder
+effort_icon=$'\xef\x80\x93'  #  single cog (FA4) — tier via color + label
+style_icon=$'\xef\x81\x80'      #  pencil
+agent_icon=$'\xef\x95\x84'      #  robot
+rate_5h_icon=$'\xef\x80\x97'    #  clock
+rate_7d_icon=$'\xef\x84\xb3'    #  calendar-alt
+session_icon=$'\xef\x8b\xb2'    #  stopwatch
+model_icon=$'\xef\x8b\x9b'      #  microchip
 
 # ── LINE 1 ──────────────────────────────────────────────
 [ -z "$cwd" ] || [ "$cwd" = "null" ] && cwd=$(pwd)
@@ -242,7 +247,9 @@ fi
 
 if [ "$cache_valid" = false ]; then
     if git_branch=$(git -C "$cwd" symbolic-ref --short HEAD 2>/dev/null); then
-        if [ -n "$(git -C "$cwd" status --porcelain --no-optional-locks 2>/dev/null)" ]; then
+        # --no-optional-locks is a global git option and must come before the subcommand;
+        # after `status` git exits 129 and the dirty marker never shows
+        if [ -n "$(git --no-optional-locks -C "$cwd" status --porcelain 2>/dev/null)" ]; then
             git_dirty="*"
         fi
     fi
@@ -299,7 +306,7 @@ elif [ -n "$ws_git_worktree" ]; then
 fi
 
 if [ -n "$vim_mode" ] && [ "$vim_mode" != "null" ]; then
-    vim_icon=$'\ue62b'
+    vim_icon=$'\xee\x98\xab'
     case "$vim_mode" in
         NORMAL)        line1+="${sep}${c_vim_n} ${vim_icon} Normal ${reset}" ;;
         INSERT)        line1+="${sep}${c_vim_i} ${vim_icon} Insert ${reset}" ;;
@@ -320,8 +327,8 @@ fi
 
 if [ -n "$effort" ]; then
     case "$effort" in
-        max)         line1+="${sep}${c_magenta_bright}${effort_icon} ${effort}${reset}" ;;
-        xhigh|high)  line1+="${sep}${c_magenta}${effort_icon} ${effort}${reset}" ;;
+        max)         line1+="${sep}${c_effort_max}${effort_icon} ${effort}${reset}" ;;
+        xhigh|high)  line1+="${sep}${c_effort}${effort_icon} ${effort}${reset}" ;;
         *)           line1+="${sep}${c_gray}${effort_icon} ${effort}${reset}" ;;
     esac
 fi
@@ -334,105 +341,39 @@ elif [ "$thinking_on" = "false" ]; then
     line1+=" ${c_wt} off${reset}"
 fi
 
-# ── Session cost + weekly ledger ────────────────────────
-cost_line=""
-if [ -n "$cost_usd" ] && [ "$cost_usd" != "null" ]; then
-    # Pure bash float → centesimal integer (no awk fork)
-    cost_int="${cost_usd%%.*}"
-    cost_frac="${cost_usd#*.}"
-    cost_frac="${cost_frac}00"
-    cost_frac="${cost_frac:0:2}"
-    cost_cents=$(( 10#${cost_int:-0} * 100 + 10#${cost_frac} ))
+line1+="${sep}${c_gray}v${STATUSLINE_VERSION}${reset}"
 
-    if [ "$cost_cents" -ge 200 ]; then
-        c_cost="$c_cost_high"
-    elif [ "$cost_cents" -ge 50 ]; then
-        c_cost="$c_cost_mid"
-    else
-        c_cost="$c_cost_low"
-    fi
-    printf -v cost_fmt '$%.2f' "$cost_usd"
+# ── LINE 2: 5H + 7D, session elapsed, cache hit ─────────
+rate_bars=""
+# Two bars side by side: 20 cells each; with session time and cache about 110 columns
+bar_width=20
 
-    # Weekly cost ledger — single awk pass for prune + upsert + aggregate
-    ledger="$HOME/.claude/cost-ledger"
-    now=$EPOCHSECONDS
-    if [ -n "$seven_reset_epoch" ] && [ "$seven_reset_epoch" != "null" ] && [ "$seven_reset_epoch" -gt 0 ] 2>/dev/null; then
-        week_start=$(( seven_reset_epoch - 604800 ))
-    else
-        week_start=$(( now - 604800 ))
-    fi
-    weekly_total="$cost_usd"
-
-    if [ -n "$session_id" ] && [ "$session_id" != "null" ]; then
-        touch "$ledger"
-        # Single awk pass: prune old entries, upsert session, aggregate total
-        # Output "SAME:total" if cost unchanged, otherwise just "total"
-        result=$(awk -F'\t' -v OFS='\t' \
-            -v sid="$session_id" -v cost="$cost_usd" -v ts="$now" -v ws="$week_start" '
-        BEGIN { found = 0; total = 0; same = 0 }
-        {
-            if ($3+0 < ws+0) next
-            if ($1 == sid) {
-                if ($2 == cost) same = 1
-                found = 1
-                print sid, cost, ts > "/dev/fd/3"
-                total += cost
-            } else {
-                print > "/dev/fd/3"
-                total += $2
-            }
-        }
-        END {
-            if (!found) { print sid, cost, ts > "/dev/fd/3"; total += cost }
-            if (same) printf "SAME:"
-            printf "%.2f", total
-        }' "$ledger" 3>"${ledger}.tmp" 2>/dev/null)
-
-        if [[ "$result" == SAME:* ]]; then
-            weekly_total="${result#SAME:}"
-            rm -f "${ledger}.tmp"
-        else
-            weekly_total="$result"
-            mv "${ledger}.tmp" "$ledger"
-        fi
-    fi
-
-    printf -v weekly_fmt '$%.2f' "$weekly_total"
-    cost_line="${c_cost}${cost_icon} ${cost_fmt}${reset}"
-    if [ "$weekly_fmt" != "$cost_fmt" ]; then
-        cost_line+=" ${c_cost_weekly}/ ${weekly_fmt}${reset}"
-    fi
-
-    # Session elapsed time (wall-clock since this conversation started)
-    session_dur=$(format_session_duration "$session_ms")
-    if [ -n "$session_dur" ]; then
-        cost_line+="${sep}${c_session}${session_icon} ${session_dur}${reset}"
-    fi
-
-    # Cache hit ratio from the most recent API call. Skipped before the first API
-    # response (all three counters are 0) to avoid misleading "0%" early in the session.
-    # Ratio = cache_read / (input + cache_creation + cache_read).
-    [[ "$cache_input"    =~ ^[0-9]+$ ]] || cache_input=0
-    [[ "$cache_creation" =~ ^[0-9]+$ ]] || cache_creation=0
-    [[ "$cache_read"     =~ ^[0-9]+$ ]] || cache_read=0
-    cache_total=$(( cache_input + cache_creation + cache_read ))
-    if [ "$cache_total" -gt 0 ]; then
-        cache_pct=$(( cache_read * 100 / cache_total ))
-        if   [ "$cache_pct" -ge 90 ]; then c_cache="$c_cache_good"
-        elif [ "$cache_pct" -ge 60 ]; then c_cache="$c_cache_mid"
-        else                               c_cache="$c_cache_low"
-        fi
-        cost_line+="${sep}${c_cache}󰓅 ${cache_pct}%${reset}"
-    fi
-fi
-
-# ── LINE 2+: Cost + Rate Limits ─────────────────────────
-rate_lines=""
-bar_width=30
-
-rate_lines+="${cost_line}"
 render_rate_bar "5H" "$five_pct"  "$five_reset_epoch"  "$c_rate_5h" "$rate_5h_icon" "%-l:%M%P"
 render_rate_bar "7D" "$seven_pct" "$seven_reset_epoch" "$c_rate_7d" "$rate_7d_icon" "%b %-d %-l:%M%P"
+
+# Session elapsed time (wall-clock since this conversation started)
+session_dur=$(format_session_duration "$session_ms")
+if [ -n "$session_dur" ]; then
+    [ -n "$rate_bars" ] && rate_bars+="$sep"
+    rate_bars+="${c_session}${session_icon} ${session_dur}${reset}"
+fi
+
+# Cache hit ratio from the most recent API call. Skipped before the first API
+# response (all three counters are 0) to avoid misleading "0%" early in the session.
+# Ratio = cache_read / (input + cache_creation + cache_read).
+[[ "$cache_input"    =~ ^[0-9]+$ ]] || cache_input=0
+[[ "$cache_creation" =~ ^[0-9]+$ ]] || cache_creation=0
+[[ "$cache_read"     =~ ^[0-9]+$ ]] || cache_read=0
+cache_total=$(( cache_input + cache_creation + cache_read ))
+if [ "$cache_total" -gt 0 ]; then
+    cache_pct=$(( cache_read * 100 / cache_total ))
+    if   [ "$cache_pct" -ge 90 ]; then c_cache="$c_cache_good"
+    elif [ "$cache_pct" -ge 60 ]; then c_cache="$c_cache_mid"
+    else                               c_cache="$c_cache_low"
+    fi
+    [ -n "$rate_bars" ] && rate_bars+="$sep"
+    rate_bars+="${c_cache}󰓅 ${cache_pct}%${reset}"
+fi
 
 # ── Output ──────────────────────────────────────────────
 # Current task + phase (reads <cwd>/.progress/<session_id>/INDEX.md; hidden entirely when absent)
@@ -453,6 +394,6 @@ fi
 
 [ -n "$task_line" ] && printf "%b\n" "$task_line"
 printf "%b" "$line1"
-[ -n "$rate_lines" ] && printf "\n%b" "$rate_lines"
+[ -n "$rate_bars" ] && printf "\n%b" "$rate_bars"
 
 exit 0
