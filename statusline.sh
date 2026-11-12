@@ -2,6 +2,9 @@
 # Disable globbing — defensive measure for handling arbitrary paths/JSON
 set -f
 
+# Bump on each release; shown (dim) at the end of line 1.
+STATUSLINE_VERSION="1.1.0"
+
 input=$(cat)
 
 if [ -z "$input" ]; then
@@ -337,6 +340,8 @@ if [ "$thinking_on" = "true" ]; then
 elif [ "$thinking_on" = "false" ]; then
     line1+=" ${c_wt} off${reset}"
 fi
+
+line1+="${sep}${c_gray}v${STATUSLINE_VERSION}${reset}"
 
 # ── LINE 2: 5H + 7D, session elapsed, cache hit ─────────
 rate_bars=""

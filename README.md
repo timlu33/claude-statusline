@@ -28,6 +28,7 @@ Claude Code 允許你用一個吃 stdin JSON、吐 stdout 文字的指令客製�
 - Worktree 標記 `[WT]` / `[WT:<name>]`
 - Vim mode、output style 縮寫、subagent 名稱
 - Effort 等級（max/high 變色）、thinking 開關指示
+- 狀態列版本號（如 `v1.1.0`，常數 `STATUSLINE_VERSION` 定義於 `statusline.sh` 開頭）
 
 **第 2 行（rate-limit 與 session）**
 - 5H / 7D rate-limit 漸層進度條 + reset 時間，兩條並排
@@ -163,6 +164,7 @@ Claude Code lets you customize the statusline with a command that reads session 
 - Worktree marker `[WT]` / `[WT:<name>]`
 - Vim mode, output-style abbreviation, subagent name
 - Effort level (max/high are colored), thinking on/off indicator
+- Statusline version (e.g. `v1.1.0`, set by `STATUSLINE_VERSION` at the top of `statusline.sh`)
 
 **Line 2 (rate limits & session)**
 - 5H / 7D rate-limit gradient bars + reset times, side by side
